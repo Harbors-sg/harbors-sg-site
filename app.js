@@ -2,7 +2,6 @@
 (() => {
   'use strict';
   let C = window.HARBOR_CONTENT;
-  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const offlineMode = location.protocol === 'file:' || new URLSearchParams(location.search).has('offline-preview');
   let page = document.body.dataset.page;
   function routeInfo() {
@@ -13,7 +12,50 @@
     return {page,params:new URLSearchParams(location.search)};
   }
   function pageParams() { return routeInfo().params; }
+  function storedLanguage() { try { return localStorage.getItem('harbors-language') || ''; } catch { return ''; } }
+  let lang = pageParams().get('lang') || new URLSearchParams(location.search).get('lang') || storedLanguage() || 'zh';
+  const isEnglish = () => lang === 'en';
+  const tr = value => isEnglish() ? (window.HARBOR_EN_TEXT?.[String(value ?? '')] || String(value ?? '')) : String(value ?? '');
+  const esc = v => tr(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function sectionId() { return offlineMode && location.hash.startsWith('#/') ? pageParams().get('section') || '' : decodeURIComponent(location.hash.slice(1)); }
+  function currentHrefWithLanguage(href) {
+    if (!isEnglish() || !href || href.startsWith('#') || /^(https?:|mailto:|tel:|javascript:)/i.test(href)) return href;
+    const u = new URL(href, location.href);
+    if (u.origin !== location.origin) return href;
+    u.searchParams.set('lang', 'en');
+    return u.pathname.split('/').pop() + u.search + u.hash;
+  }
+  function translateRenderedText() {
+    if (!isEnglish()) return;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const raw = node.nodeValue, trimmed = raw.trim(), translated = window.HARBOR_EN_TEXT?.[trimmed];
+      if (translated) node.nodeValue = raw.replace(trimmed, translated);
+    }
+    document.body.querySelectorAll('*').forEach(el => {
+      for (const attr of ['aria-label', 'title', 'alt']) {
+        const value = el.getAttribute(attr), translated = value && window.HARBOR_EN_TEXT?.[value];
+        if (translated) el.setAttribute(attr, translated);
+      }
+      const href = el.getAttribute('href');
+      if (href && !el.hasAttribute('target')) el.setAttribute('href', currentHrefWithLanguage(href));
+    });
+  }
+  function chooseLanguage(next) {
+    lang = next;
+    try { localStorage.setItem('harbors-language', next); } catch {}
+    if (offlineMode && location.hash.startsWith('#/')) {
+      const params = new URLSearchParams(pageParams());
+      if (next === 'en') params.set('lang', 'en'); else params.delete('lang');
+      offlineRoute(page, params);
+      return;
+    }
+    const url = new URL(location.href);
+    if (next === 'en') url.searchParams.set('lang', 'en'); else url.searchParams.delete('lang');
+    try { history.replaceState(null, '', url.pathname + url.search + url.hash); } catch {}
+    mount();
+  }
   if (offlineMode && location.hash.startsWith('#/')) page=routeInfo().page;
   function offlineRoute(name,params) {
     const next='#/'+name+(params.toString()?'?'+params.toString():'');
@@ -39,12 +81,13 @@
   const query = title => 'contact.html?service='+encodeURIComponent(title);
   const honorsImage = name => 'assets/'+name;
   function header(){
-    document.getElementById('site-header').innerHTML = `<div class="header-inner"><a class="brand" href="index.html" aria-label="${esc(C.brand.name)}首页"><img src="assets/logo.png" width="181" height="55" alt="HARBORS@SG 南洋港湾"></a><div class="nav-wrap"><button class="menu-toggle" type="button" aria-label="展开导航菜单" aria-controls="main-nav" aria-expanded="false">菜单 <span aria-hidden="true">＋</span></button><nav id="main-nav" class="nav" aria-label="主导航">${navItems.map(([id,t,url])=>`<a href="${url}"${(page===id||(page==='advisory'&&id==='about'))?' aria-current="page"':''}>${t}</a>`).join('')}</nav></div><a class="header-cta" href="contact.html">预约沟通${arrow}</a></div>`;
+    document.getElementById('site-header').innerHTML = `<div class="header-inner"><a class="brand" href="index.html" aria-label="${isEnglish()?'HARBORS@SG Home':'南洋港湾首页'}"><img src="assets/logo.png" width="181" height="55" alt="HARBORS@SG 南洋港湾"></a><div class="nav-wrap"><div class="nav-tools"><button class="menu-toggle" type="button" aria-label="展开导航菜单" aria-controls="main-nav" aria-expanded="false">菜单 <span aria-hidden="true">＋</span></button><div class="language-switch" role="group" aria-label="选择语言"><button type="button" data-language="zh" aria-pressed="${!isEnglish()}">中文</button><span aria-hidden="true">/</span><button type="button" data-language="en" aria-pressed="${isEnglish()}">English</button></div></div><nav id="main-nav" class="nav" aria-label="主导航">${navItems.map(([id,t,url])=>`<a href="${url}"${(page===id||(page==='advisory'&&id==='about'))?' aria-current="page"':''}>${esc(t)}</a>`).join('')}</nav></div><a class="header-cta" href="contact.html">${esc('预约沟通')}${arrow}</a></div>`;
+    document.querySelectorAll('[data-language]').forEach(button=>button.addEventListener('click',()=>chooseLanguage(button.dataset.language)));
     const toggle = document.querySelector('.menu-toggle');
-    toggle.addEventListener('click',()=>{const open=toggle.getAttribute('aria-expanded')!=='true';toggle.setAttribute('aria-expanded',String(open));toggle.setAttribute('aria-label',open?'收起导航菜单':'展开导航菜单');toggle.innerHTML='菜单 <span aria-hidden="true">'+(open?'−':'＋')+'</span>';document.querySelector('.nav').classList.toggle('open',open);});
+    toggle.addEventListener('click',()=>{const open=toggle.getAttribute('aria-expanded')!=='true';toggle.setAttribute('aria-expanded',String(open));toggle.setAttribute('aria-label',tr(open?'收起导航菜单':'展开导航菜单'));toggle.innerHTML=esc('菜单')+' <span aria-hidden="true">'+(open?'−':'＋')+'</span>';document.querySelector('.nav').classList.toggle('open',open);});
   }
   function footer(){
-    document.getElementById('site-footer').innerHTML=`<div class="container"><div class="footer-top"><div class="footer-brand"><a href="index.html"><img src="assets/logo-white.png" alt="HARBORS@SG 南洋港湾" width="185" height="55"></a></div><div class="footer-column"><h3>企业服务 / SERVICES</h3>${C.services.items.map(x=>`<a href="services.html#${esc(x.id)}">${esc(x.title)}</a>`).join('')}</div><div class="footer-column"><h3>了解港湾 / EXPLORE</h3><a href="solutions.html">复杂问题处理</a><a href="about.html">港湾特色</a><a href="honors.html">公益与荣誉</a><a href="index.html#chair">创始人寄语</a><a href="advisory.html">顾问服务</a><a href="about.html#process">合作流程</a><a href="contact.html">联系我们</a></div></div><div class="footer-bottom"><span>© 2026 ${esc(C.brand.english)} · ${esc(C.brand.name)}<br>${esc(C.brand.tagline)}</span><span>${esc(C.contact.footerNote)}<br>新加坡 · 企业服务与社区</span></div></div>`;
+    document.getElementById('site-footer').innerHTML=`<div class="container"><div class="footer-top"><div class="footer-brand"><a href="index.html"><img src="assets/logo-white.png" alt="${isEnglish()?'HARBORS@SG':'HARBORS@SG 南洋港湾'}" width="185" height="55"></a></div><div class="footer-column"><h3>企业服务 / SERVICES</h3>${C.services.items.map(x=>`<a href="services.html#${esc(x.id)}">${esc(x.title)}</a>`).join('')}</div><div class="footer-column"><h3>了解港湾 / EXPLORE</h3><a href="solutions.html">复杂问题处理</a><a href="about.html">港湾特色</a><a href="honors.html">公益与荣誉</a><a href="index.html#chair">创始人寄语</a><a href="advisory.html">顾问服务</a><a href="about.html#process">合作流程</a><a href="contact.html">联系我们</a></div></div><div class="footer-bottom"><span>© 2026 ${isEnglish()?'HARBORS@SG':`${esc(C.brand.english)} · ${esc(C.brand.name)}`}<br>${esc(C.brand.tagline)}</span><span>${esc(C.contact.footerNote)}<br>新加坡 · 企业服务与社区</span></div></div>`;
   }
   function pageHero(d){const photos={services:'financial-review',solutions:'business-meeting',about:'business-meeting',honors:'singapore-bay',advisory:'business-meeting',contact:'business-city'};return `<section class="page-hero v2-page-hero"><img class="page-scene" src="assets/${photos[page]||'business-city'}.webp" alt="${page==='honors'?'新加坡海湾意象':'商务场景意象，AI生成'}"><div class="page-shade"></div><div class="container"><div>${eyebrow(d.eyebrow)}<h1>${esc(d.title)}</h1></div><p class="body-copy">${esc(d.intro)}</p></div></section>`;}
   function cta(){return `<section class="cta-section"><div class="container cta-inner"><div>${eyebrow('YOUR NEXT STEP')}<h2 class="section-title">${esc(C.cta.title)}</h2></div><div class="cta-right"><p>${esc(C.cta.text)}</p>${btn(C.cta.button,'contact.html')}</div></div></section>`;}
@@ -68,7 +111,7 @@
     ${honorsPreview()}
     ${cta()}<section class="section"><div class="container faq-wrap"><div>${eyebrow('A FEW QUESTIONS / 常见问题')}<h2 class="section-title">您可能想先问。</h2></div>${faq(3)}</div></section>`;
   }
-  function services(){return pageHero(C.services)+`<section class="section service-overview"><div class="container"><div class="section-head"><div>${eyebrow('SIX CORE SERVICES / 六项核心服务')}<h2 class="section-title">从设立到持续经营，<br>每一步都有对应支持。</h2></div><p class="body-copy">先从服务总览找到相关事项，再查看具体协助内容、所需资料与服务边界。六项服务均可按实际需要逐项沟通。</p></div><div class="service-grid service-overview-grid">${C.services.items.map((x,i)=>`<a class="service-card" href="#${esc(x.id)}"><div class="service-card-top"><span class="service-symbol">${icon(serviceIcons[i])}</span><span class="index-num">${number(i)} / 06</span></div><h3>${esc(x.title)}</h3><span class="english">${esc(x.english)}</span><p>${esc(x.short)}</p><span class="service-card-action">查看服务内容${arrow}</span></a>`).join('')}</div></div></section><section class="section service-details-section"><div class="container service-details-list">${C.services.items.map((x,i)=>`<article class="service-detail" id="${esc(x.id)}"><div class="detail-head"><span class="detail-symbol">${icon(serviceIcons[i])}</span><div><span class="index-num">${number(i)} / 06</span><h2>${esc(x.title)}</h2><span class="english">${esc(x.english)}</span></div></div><div class="detail-intro-grid"><p class="body-copy">${esc(x.description)}</p><img src="assets/${['business-city','business-meeting','financial-review','business-city','financial-review','financial-review'][i]}.webp" loading="lazy" alt="${esc(x.title)}的商务场景示意，AI生成" width="300" height="190"></div><div class="scope-grid"><div><h3 class="small-heading">我们可以协助的工作</h3><ul class="scope-list">${x.scope.map(y=>`<li>${esc(y)}</li>`).join('')}</ul></div><div class="prepare-box"><h3 class="small-heading">开始沟通前，可以准备</h3><p>${esc(x.prepare)}</p></div></div><p class="boundary">${esc(x.boundary)}</p>${link('就这项服务沟通',query(x.title))}</article>`).join('')}</div></section>${cta()}`;}
+  function services(){const servicePhotos=['service-incorporation.jpg','business-meeting.webp','service-accounting.jpg','business-city.webp','financial-review.webp','service-advisory.jpg'];return pageHero(C.services)+`<section class="section service-overview"><div class="container"><div class="section-head"><div>${eyebrow('SIX CORE SERVICES / 六项核心服务')}<h2 class="section-title">从设立到持续经营，<br>每一步都有对应支持。</h2></div><p class="body-copy">先从服务总览找到相关事项，再查看具体协助内容、所需资料与服务边界。六项服务均可按实际需要逐项沟通。</p></div><div class="service-grid service-overview-grid">${C.services.items.map((x,i)=>`<a class="service-card" href="#${esc(x.id)}"><div class="service-card-top"><span class="service-symbol">${icon(serviceIcons[i])}</span><span class="index-num">${number(i)} / 06</span></div><h3>${esc(x.title)}</h3><span class="english">${esc(x.english)}</span><p>${esc(x.short)}</p><span class="service-card-action">查看服务内容${arrow}</span></a>`).join('')}</div></div></section><section class="section service-details-section"><div class="container service-details-list">${C.services.items.map((x,i)=>`<article class="service-detail" id="${esc(x.id)}"><div class="detail-head"><span class="detail-symbol">${icon(serviceIcons[i])}</span><div><span class="index-num">${number(i)} / 06</span><h2>${esc(x.title)}</h2><span class="english">${esc(x.english)}</span></div></div><div class="detail-intro-grid"><p class="body-copy">${esc(x.description)}</p><img src="assets/${servicePhotos[i]}" loading="lazy" alt="${isEnglish()?`${esc(x.title)} business service scene, AI-generated`:`${esc(x.title)}的商务场景示意，AI生成`}" width="300" height="190"></div><div class="scope-grid"><div><h3 class="small-heading">我们可以协助的工作</h3><ul class="scope-list">${x.scope.map(y=>`<li>${esc(y)}</li>`).join('')}</ul></div><div class="prepare-box"><h3 class="small-heading">开始沟通前，可以准备</h3><p>${esc(x.prepare)}</p></div></div><p class="boundary">${esc(x.boundary)}</p>${link('就这项服务沟通',query(x.title))}</article>`).join('')}</div></section>${cta()}`;}
   function solutions(){return pageHero(C.solutions)+`<section class="section"><div class="container solution-layout"><aside class="solution-aside">${eyebrow('START WITH THE FACTS')}<h2>先告诉我们，<br>事情走到了哪一步。</h2><p>${esc(C.solutions.note)}</p><img class="solution-side-photo" src="assets/financial-review.webp" loading="lazy" alt="文件审阅示意，AI生成" width="400" height="300"><div class="actions">${link('直接聊聊您的问题','contact.html')}</div></aside><div class="solution-details">${C.solutions.items.map((x,i)=>`<details id="${esc(x.id)}"${i===0?' open':''}><summary><span class="solution-symbol">${icon(problemIcons[i])}</span><div><h2>${esc(x.title)}</h2><span class="english">${esc(x.english)}</span></div></summary><div class="solution-body"><h3>${esc(x.question)}</h3><p>${esc(x.description)}</p><div class="prepare-box"><h4 class="small-heading">第一次沟通时，可带上</h4><p>${esc(x.prepare)}</p></div>${link('就这个问题沟通',query(x.title))}</div></details>`).join('')}</div></div></section>${cta()}`;}
   function about(){return pageHero(C.about)+`<section class="section"><div class="container about-story"><figure class="story-art"><img src="assets/business-meeting.webp" loading="lazy" width="600" height="400" alt="商务沟通场景示意，AI生成"><figcaption>AI 商务场景示意 · 非港湾团队或办公场所实拍。</figcaption></figure><div class="story-copy">${eyebrow('LISTEN BEFORE WE ACT')}<h2 class="section-title">${esc(C.about.beliefTitle)}</h2><p class="body-copy">${esc(C.about.beliefText)}</p></div></div></section>
     <section class="section about-features"><div class="container"><div class="section-head"><div>${eyebrow('OUR DISTINCTIVE STRENGTHS')}<h2 class="section-title">理解人的处境，<br>也看清事情的边界。</h2></div><p class="body-copy">${esc(C.about.featureIntro)}</p></div><div class="feature-grid">${C.about.features.map(x=>`<article class="feature-item"><span class="feature-symbol">${icon(x.id==='legal'?'law':'people')}</span><div><h3>${esc(x.title)}</h3><span class="english">${esc(x.english)}</span><p class="body-copy">${esc(x.description)}</p></div><a class="feature-card-arrow" href="${x.id==='advisory'?'advisory.html':x.id==='legal'?'solutions.html#legal':'honors.html#bilingual-community'}" aria-label="${x.id==='advisory'?'了解顾问服务':x.id==='legal'?'查看法律实务':'了解生活社区'}">↗</a></article>`).join('')}</div></div></section>
@@ -81,8 +124,14 @@
     if(offlineMode&&location.hash.startsWith('#/'))page=routeInfo().page;
     const renderers={home,services,solutions,about,honors,contact,advisory};if(!renderers[page])page='home';
     document.body.dataset.page=page;
-    document.title=(page==='advisory'?'顾问服务':navItems.find(x=>x[0]===page)?.[1]||'企业服务')+' | 南洋港湾 HARBORS@SG';
+    document.documentElement.lang=isEnglish()?'en-SG':'zh-CN';
+    document.body.classList.toggle('is-english',isEnglish());
+    const pageTitle=page==='advisory'?'顾问服务':navItems.find(x=>x[0]===page)?.[1]||'企业服务';
+    document.title=isEnglish()?`${tr(pageTitle)} | HARBORS@SG`:`${pageTitle} | 南洋港湾 HARBORS@SG`;
+    const description=document.querySelector('meta[name="description"]');
+    if(description)description.content=tr(description.content);
     header();footer();main.innerHTML=renderers[page]();
+    translateRenderedText();
     let id;try{id=sectionId();}catch{id='';}const target=id&&document.getElementById(id);
     if(target){if(target.tagName==='DETAILS')target.open=true;requestAnimationFrame(()=>target.scrollIntoView({block:'start',behavior:'instant'}));}
   }
